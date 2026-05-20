@@ -3,6 +3,8 @@
 **/Output/
 **/Listings/
 **/Objects/
+deps/
+dist/
 *.o
 *.d
 *.elf

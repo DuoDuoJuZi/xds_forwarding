@@ -1,0 +1,103 @@
+name: Build and Release XDS ANT Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-firmware:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Make
+        run: choco install make -y --no-progress
+
+      - name: Download nRF5 SDK 17.1.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://developer.nordicsemi.com/nRF5_SDK/nRF5_SDK_v17.x.x/nRF5_SDK_17.1.0_ddde560.zip" `
+            -OutFile "deps/nRF5_SDK_17.1.0_ddde560.zip"
+          Expand-Archive `
+            -Path "deps/nRF5_SDK_17.1.0_ddde560.zip" `
+            -DestinationPath "deps" `
+            -Force
+
+      - name: Download Arm GNU Toolchain 12.2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          Invoke-WebRequest `
+            -Uri "https://developer.arm.com/-/media/Files/downloads/gnu/12.2.mpacbti-rel1/binrel/arm-gnu-toolchain-12.2.mpacbti-rel1-mingw-w64-i686-arm-none-eabi.zip" `
+            -OutFile "deps/arm-gnu-toolchain-12.2.mpacbti-rel1-mingw-w64-i686-arm-none-eabi.zip"
+          Expand-Archive `
+            -Path "deps/arm-gnu-toolchain-12.2.mpacbti-rel1-mingw-w64-i686-arm-none-eabi.zip" `
+            -DestinationPath "deps" `
+            -Force
+
+      - name: Build nRF52832 Firmware
+        working-directory: ./s212/armgcc
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          make nrf52832_xxaa `
+            SDK_ROOT="${{ github.workspace }}/deps/nRF5_SDK_17.1.0_ddde560" `
+            GNU_INSTALL_ROOT="${{ github.workspace }}/deps/arm-gnu-toolchain-12.2.mpacbti-rel1-mingw-w64-i686-arm-none-eabi/bin/" `
+            GNU_VERSION=12.2.1
+
+      - name: Package Firmware
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "s212/armgcc/_build/nrf52832_xxaa.hex" "dist/xds_ble_to_ant_bpwr_s332_app.hex"
+          Copy-Item "s212/armgcc/_build/nrf52832_xxaa.bin" "dist/xds_ble_to_ant_bpwr_s332_app.bin"
+          Copy-Item "s212/armgcc/_build/nrf52832_xxaa.map" "dist/xds_ble_to_ant_bpwr_s332_app.map"
+          Copy-Item `
+            "NordicSoftDevices-8ea8cb4349f8a093768482e389c30b5a3993f78b/ANT_s332_nrf52_7.0.1/ANT_s332_nrf52_7.0.1.hex" `
+            "dist/ANT_s332_nrf52_7.0.1.hex"
+
+          Compress-Archive `
+            -Path "dist/*" `
+            -DestinationPath "dist/xds_ble_to_ant_bpwr_s332_firmware.zip" `
+            -Force
+
+      - name: Upload Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: XDS-ANT-Bridge-Firmware
+          path: dist/*
+
+  publish-release:
+    needs: [build-firmware]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
